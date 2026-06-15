@@ -26,7 +26,7 @@ image = { version = "0.25", default-features = false, features = [
     "tga", "pnm", "hdr", "ff", "qoi",
     "rayon",
 ] }
-resvg = "0"
+resvg = "0.44"
 
 [profile.release]
 opt-level     = 3

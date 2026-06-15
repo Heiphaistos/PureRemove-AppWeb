@@ -11,6 +11,11 @@ const INPUT_SIZE: usize = 1024;
 
 static SESSION: OnceLock<Mutex<Session>> = OnceLock::new();
 
+/// Retourne true si le modèle est déjà chargé en mémoire (check non-bloquant).
+pub fn is_model_loaded() -> bool {
+    SESSION.get().is_some()
+}
+
 /// Charge le modèle ONNX une seule fois (singleton). Idempotent.
 pub fn init_model(model_path: &Path) -> Result<()> {
     if SESSION.get().is_some() {
@@ -41,7 +46,7 @@ pub fn run_inference(img: &DynamicImage) -> Result<GrayImage> {
 
     let mut session = session_mutex
         .lock()
-        .unwrap_or_else(|e| e.into_inner());
+        .map_err(|_| anyhow::anyhow!("Session ONNX corrompue — redémarrage requis"))?;
 
     let (orig_w, orig_h) = (img.width(), img.height());
     if orig_w == 0 || orig_h == 0 {

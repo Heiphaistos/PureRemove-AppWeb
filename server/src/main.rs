@@ -31,7 +31,8 @@ use tower_http::{
 
 const VERSION: &str = env!("CARGO_PKG_VERSION");
 const MAX_UPLOAD_BYTES: usize = 25 * 1024 * 1024; // 25 MB
-const MAX_INFLIGHT: usize = 2; // inférences simultanées max (RAM protection)
+// Le Mutex<Session> dans ml_engine sérialise déjà l'inférence → 1 seul permit suffit
+const MAX_INFLIGHT: usize = 1; // Mutex<Session> sérialise — pas de concurrence réelle
 
 // ─── État partagé ─────────────────────────────────────────────────────────────
 
@@ -62,7 +63,7 @@ impl KeyExtractor for ClientIpExtractor {
         };
 
         header_ip("cf-connecting-ip")
-            .or_else(|| header_ip("x-forwarded-for"))
+            .or_else(|| header_ip("x-real-ip"))
             .or_else(|| {
                 req.extensions()
                     .get::<axum::extract::ConnectInfo<SocketAddr>>()
@@ -105,8 +106,9 @@ fn internal(msg: impl Into<String>) -> ApiError {
 
 // ─── Handlers ─────────────────────────────────────────────────────────────────
 
-async fn health(State(state): State<Arc<AppState>>) -> impl IntoResponse {
-    let model_ok = ml_engine::init_model(&state.model_path).is_ok();
+async fn health(_state: State<Arc<AppState>>) -> impl IntoResponse {
+    // is_model_loaded() est non-bloquant : ne charge pas le modèle, ne bloque pas tokio
+    let model_ok = ml_engine::is_model_loaded();
     Json(serde_json::json!({
         "status": "ok",
         "model": model_ok,
@@ -201,11 +203,9 @@ async fn main() -> anyhow::Result<()> {
     );
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "../web/dist".into());
 
-    // Init modèle au démarrage (non bloquant si absent : /api/process réessaiera)
-    match ml_engine::init_model(&model_path) {
-        Ok(()) => tracing::info!("Modèle RMBG-1.4 chargé : {}", model_path.display()),
-        Err(e) => tracing::warn!("Modèle non chargé au démarrage : {e}"),
-    }
+    // Init modèle AVANT le bind TCP : bloque le démarrage si le modèle est absent
+    ml_engine::init_model(&model_path)?;
+    tracing::info!("Modèle RMBG-1.4 chargé : {}", model_path.display());
 
     let state = Arc::new(AppState {
         model_path,

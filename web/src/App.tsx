@@ -131,6 +131,8 @@ export default function App() {
 
   const processBatch = useCallback(async (files: File[]) => {
     singleFileRef.current = null;
+    // Libère les object URLs du batch précédent avant d'en créer de nouvelles
+    revokeAllUrls();
     const items: ImageItem[] = files.map((f) => ({
       id: crypto.randomUUID(),
       name: f.name,

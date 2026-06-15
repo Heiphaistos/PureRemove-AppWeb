@@ -22,6 +22,19 @@ export function SplitPreview({
   const containerRef = useRef<HTMLDivElement>(null);
   const isDragging = useRef(false);
 
+  const handleKeyDown = useCallback(
+    (e: React.KeyboardEvent) => {
+      if (e.key === "ArrowLeft") {
+        e.preventDefault();
+        setSliderPos((p) => Math.max(p - 2, 2));
+      } else if (e.key === "ArrowRight") {
+        e.preventDefault();
+        setSliderPos((p) => Math.min(p + 2, 98));
+      }
+    },
+    []
+  );
+
   const updateSlider = useCallback((clientX: number) => {
     const container = containerRef.current;
     if (!container) return;
@@ -102,6 +115,13 @@ export function SplitPreview({
         <div
           className="absolute top-1/2 -translate-y-1/2 -translate-x-1/2 z-20 w-8 h-8 rounded-full bg-white shadow-xl flex items-center justify-center cursor-col-resize"
           style={{ left: `${sliderPos}%` }}
+          tabIndex={0}
+          role="slider"
+          aria-valuenow={Math.round(sliderPos)}
+          aria-valuemin={0}
+          aria-valuemax={100}
+          aria-label="Comparaison avant/après"
+          onKeyDown={handleKeyDown}
         >
           <svg className="w-4 h-4 text-gray-700" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
             <path strokeLinecap="round" strokeLinejoin="round" d="M8 9l-3 3 3 3M16 9l3 3-3 3" />
