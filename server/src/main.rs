@@ -7,7 +7,7 @@ mod ml_engine;
 use anyhow::anyhow;
 use axum::{
     extract::{DefaultBodyLimit, Multipart, State},
-    http::{header, Request, StatusCode},
+    http::{header, HeaderValue, Request, StatusCode},
     response::{IntoResponse, Response},
     routing::{get, post},
     Json, Router,
@@ -25,7 +25,9 @@ use tower_governor::{
     governor::GovernorConfigBuilder, key_extractor::KeyExtractor, GovernorError, GovernorLayer,
 };
 use tower_http::{
+    cors::{AllowOrigin, CorsLayer},
     services::{ServeDir, ServeFile},
+    set_header::SetResponseHeaderLayer,
     timeout::TimeoutLayer,
 };
 
@@ -109,10 +111,10 @@ fn internal(msg: impl Into<String>) -> ApiError {
 async fn health(_state: State<Arc<AppState>>) -> impl IntoResponse {
     // is_model_loaded() est non-bloquant : ne charge pas le modèle, ne bloque pas tokio
     let model_ok = ml_engine::is_model_loaded();
+    // Note : version non exposée publiquement (info disclosure)
     Json(serde_json::json!({
         "status": "ok",
         "model": model_ok,
-        "version": VERSION,
     }))
 }
 
@@ -173,7 +175,10 @@ async fn process_image(
         image_processor::encode_png(&result)
     })
     .await
-    .map_err(|e| internal(format!("Tâche interrompue : {e}")))?
+    .map_err(|e| {
+        tracing::error!("spawn_blocking interrompu : {e}");
+        internal("Traitement interrompu — réessayez.")
+    })?
     .map_err(|e| {
         tracing::error!("Traitement échoué : {e}");
         bad_request(format!("Traitement impossible : {e}"))
@@ -202,6 +207,8 @@ async fn main() -> anyhow::Result<()> {
         std::env::var("MODEL_PATH").unwrap_or_else(|_| "./model.onnx".into()),
     );
     let static_dir = std::env::var("STATIC_DIR").unwrap_or_else(|_| "../web/dist".into());
+    let allowed_origin = std::env::var("ALLOWED_ORIGIN")
+        .unwrap_or_else(|_| "https://pureremove.heiphaistos.org".into());
 
     // Init modèle AVANT le bind TCP : bloque le démarrage si le modèle est absent
     ml_engine::init_model(&model_path)?;
@@ -222,19 +229,50 @@ async fn main() -> anyhow::Result<()> {
             .ok_or_else(|| anyhow!("Config rate-limit invalide"))?,
     );
 
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::exact(
+            allowed_origin.parse::<HeaderValue>()
+                .map_err(|e| anyhow!("ALLOWED_ORIGIN invalide : {e}"))?,
+        ));
+
+    // Security headers appliqués à toutes les réponses
+    let csp = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data: blob:; connect-src 'self'; frame-ancestors 'none'";
+    let sec_headers = tower::ServiceBuilder::new()
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(csp),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("strict-origin-when-cross-origin"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("camera=(), microphone=(), geolocation=()"),
+        ));
+
     let api = Router::new()
         .route("/api/process", post(process_image))
         .route("/api/health", get(health))
+        .layer(cors)
         .layer(GovernorLayer { config: governor_conf })
         .layer(DefaultBodyLimit::max(MAX_UPLOAD_BYTES))
-        .layer(TimeoutLayer::new(Duration::from_secs(60)))
+        .layer(TimeoutLayer::with_status_code(StatusCode::REQUEST_TIMEOUT, Duration::from_secs(60)))
         .with_state(state);
 
     // ── Frontend statique (SPA fallback sur index.html) ──
     let index = format!("{static_dir}/index.html");
     let static_service = ServeDir::new(&static_dir).fallback(ServeFile::new(&index));
 
-    let app = api.fallback_service(static_service);
+    let app = api.fallback_service(static_service).layer(sec_headers);
 
     let addr = SocketAddr::from(([127, 0, 0, 1], port));
     tracing::info!("PureRemove Web v{VERSION} — écoute sur http://{addr}");

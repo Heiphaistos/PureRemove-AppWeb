@@ -40,7 +40,11 @@ export function downloadBlob(blob: Blob, filename: string): void {
   const a = document.createElement("a");
   a.href = url;
   a.download = filename;
+  a.rel = "noopener noreferrer";
+  // Nécessaire sur Firefox : l'ancre doit être dans le DOM pour déclencher le DL
+  document.body.appendChild(a);
   a.click();
+  document.body.removeChild(a);
   // Laisse le temps au navigateur de démarrer le téléchargement avant revoke
   setTimeout(() => URL.revokeObjectURL(url), 10_000);
 }
