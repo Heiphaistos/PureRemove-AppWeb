@@ -181,7 +181,11 @@ async fn process_image(
     })?
     .map_err(|e| {
         tracing::error!("Traitement échoué : {e}");
-        bad_request(format!("Traitement impossible : {e}"))
+        // Expose uniquement un message générique (pas de chemin/stacktrace interne)
+        let msg = e.to_string();
+        let safe = if msg.len() > 200 { "Traitement impossible — format non supporté ou image corrompue." }
+                   else { &msg };
+        bad_request(safe.to_string())
     })?;
 
     Ok((
