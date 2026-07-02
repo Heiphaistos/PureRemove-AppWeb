@@ -311,6 +311,12 @@ export default function App() {
           />
         )}
       </main>
+
+      <footer className="text-center py-3 text-xs text-neutral-500">
+        <a href="https://heiphaistos.org/legal/" target="_blank" rel="noopener noreferrer" className="hover:underline">
+          Mentions légales
+        </a>
+      </footer>
     </div>
   );
 }
